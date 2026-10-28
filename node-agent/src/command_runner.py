@@ -47,6 +47,7 @@ ALLOWED_COMMAND_TYPES = {
     "sync_throttled_ips",
     "set_ndpi",
     "set_shaper",
+    "set_cdn_policy",
     "ping",
 }
 
@@ -118,6 +119,11 @@ class CommandRunner:
         self._penalties_seen: Dict[tuple, float] = {}
         #: Последний ответ set_shaper — отдаём его, если настройки не менялись
         self._shaper_state: Optional[dict] = None
+        self._cdn_personal: Dict[str, int] = {}
+        self._cdn_rules: Dict[int, tuple] = {}
+        self._cdn_clients: set[str] = set()
+        self._cdn_loaded = False
+        self._cdn_cleanup_done = False
 
     async def handle(self, msg: dict) -> None:
         """Route an incoming command message."""
@@ -169,6 +175,8 @@ class CommandRunner:
             await self._set_ndpi(msg)
         elif msg_type == "set_shaper":
             await self._set_shaper(msg)
+        elif msg_type == "set_cdn_policy":
+            await self._set_cdn_policy(msg)
 
     async def _run_shell(self, script: str, timeout: int) -> tuple:
         """Run a shell script (on the HOST via nsenter when host_mode).
@@ -347,14 +355,120 @@ class CommandRunner:
         else:
             logger.error("Throttling failed (exit=%d): %.500s", exit_code, output)
 
+        cdn_output, cdn_exit = "", 0
+        if getattr(self._settings, "cdn_shaping_enabled", False) is True:
+            cdn_personal, skipped_v6 = shaper.cdn_personal(personal)
+            if skipped_v6:
+                logger.info("CDN throttling skipped %d IPv6 personal rules", skipped_v6)
+            try:
+                cdn_output, cdn_exit = await self._apply_cdn_state(personal=cdn_personal)
+            except Exception as e:
+                self._cdn_loaded = False
+                self._cdn_cleanup_done = False
+                cdn_output, cdn_exit = f"ERROR={e}", 1
+            if cdn_exit != 0:
+                logger.error("CDN throttling failed (exit=%d): %.500s", cdn_exit, cdn_output)
+
         if command_id:
+            combined_output = output[-8000:]
+            if cdn_output:
+                combined_output = f"{combined_output}\nCDN: {cdn_output}"[-10000:]
             await self._send({
                 "type": "command_result",
                 "command_id": command_id,
-                "status": "completed" if exit_code == 0 else "error",
-                "output": output[-10000:],
-                "exit_code": exit_code,
+                "status": "completed" if exit_code == 0 and cdn_exit == 0 else "error",
+                "output": combined_output,
+                "exit_code": exit_code if exit_code != 0 else cdn_exit,
             })
+
+    async def _apply_cdn_state(
+        self,
+        *,
+        personal: Optional[Dict[str, int]] = None,
+        rules: Optional[Dict[int, tuple]] = None,
+        non_mobile: Optional[set[str]] = None,
+    ) -> tuple:
+        """Синхронизировать CDN-карты на lo без перезагрузки программы."""
+        from . import shaper
+
+        if personal is not None:
+            self._cdn_personal = personal
+        if rules is not None:
+            self._cdn_rules = rules
+        if non_mobile is not None:
+            self._cdn_clients = non_mobile
+
+        active = bool(self._cdn_personal or self._cdn_rules)
+        if not active and not self._cdn_loaded and self._cdn_cleanup_done:
+            return "CDN=inactive\n", 0
+        incremental = self._cdn_loaded and active
+        output, exit_code = "", 0
+        if incremental:
+            old_personal = getattr(self, "_cdn_applied_personal", {})
+            old_rules = getattr(self, "_cdn_applied_rules", {})
+            old_clients = getattr(self, "_cdn_applied_clients", set())
+            personal_set = {ip: rate for ip, rate in self._cdn_personal.items()
+                            if old_personal.get(ip) != rate}
+            personal_delete = set(old_personal) - set(self._cdn_personal)
+            rules_set = {port: rule for port, rule in self._cdn_rules.items()
+                         if old_rules.get(port) != rule}
+            rules_delete = set(old_rules) - set(self._cdn_rules)
+            clients_add = self._cdn_clients - old_clients
+            clients_delete = old_clients - self._cdn_clients
+            if personal_set or personal_delete or rules_set or rules_delete or clients_add or clients_delete:
+                script = shaper.build_cdn_update_script(
+                    personal_set, personal_delete, rules_set, rules_delete,
+                    clients_add, clients_delete,
+                )
+                output, exit_code = await self._run_hostnet(script, timeout=60)
+            if exit_code == shaper.RELOAD_EXIT:
+                incremental = False
+
+        if not incremental:
+            if active:
+                script = shaper.build_cdn_apply_script(
+                    self._cdn_personal, self._cdn_rules, self._cdn_clients,
+                )
+            else:
+                script = shaper.build_cdn_disable_script()
+            output, exit_code = await self._run_hostnet(script, timeout=60)
+
+        self._cdn_loaded = exit_code == 0 and active
+        self._cdn_cleanup_done = exit_code == 0 and not active
+        if exit_code == 0:
+            self._cdn_applied_personal = dict(self._cdn_personal)
+            self._cdn_applied_rules = dict(self._cdn_rules)
+            self._cdn_applied_clients = set(self._cdn_clients)
+        return output, exit_code
+
+    async def _set_cdn_policy(self, msg: dict) -> None:
+        """Применить заменяемые per-inbound действия и IPv4 bypass-адреса."""
+        from . import shaper
+
+        command_id = msg.get("command_id")
+        if getattr(self._settings, "cdn_shaping_enabled", False) is not True:
+            await self._send({
+                "type": "command_result", "command_id": command_id,
+                "status": "error", "output": "CDN shaping is disabled on this agent",
+                "exit_code": 1,
+            })
+            return
+
+        rules, skipped_rules = shaper.parse_cdn_policy(msg.get("rules") or [])
+        non_mobile, skipped_ips = shaper.parse_cdn_clients(msg.get("non_mobile_ips") or [])
+        if skipped_rules or skipped_ips:
+            logger.warning("CDN policy skipped entries: rules=%d ips=%d", skipped_rules, skipped_ips)
+        try:
+            output, exit_code = await self._apply_cdn_state(rules=rules, non_mobile=non_mobile)
+        except Exception as e:
+            self._cdn_loaded = False
+            self._cdn_cleanup_done = False
+            output, exit_code = f"ERROR={e}", 1
+        await self._send({
+            "type": "command_result", "command_id": command_id,
+            "status": "completed" if exit_code == 0 else "error",
+            "output": output[-10000:], "exit_code": exit_code,
+        })
 
     async def collect_penalties(self) -> list:
         """Штрафы шейпера, о которых панель ещё не знает; пусто, если штраф не включён."""

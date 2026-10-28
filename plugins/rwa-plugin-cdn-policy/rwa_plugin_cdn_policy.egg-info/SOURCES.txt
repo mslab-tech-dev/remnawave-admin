@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+rwa_plugin_cdn_policy/__init__.py
+rwa_plugin_cdn_policy.egg-info/PKG-INFO
+rwa_plugin_cdn_policy.egg-info/SOURCES.txt
+rwa_plugin_cdn_policy.egg-info/dependency_links.txt
+rwa_plugin_cdn_policy.egg-info/entry_points.txt
+rwa_plugin_cdn_policy.egg-info/requires.txt
+rwa_plugin_cdn_policy.egg-info/top_level.txt
+rwa_plugin_cdn_policy/static/app.js
+tests/test_policy.py

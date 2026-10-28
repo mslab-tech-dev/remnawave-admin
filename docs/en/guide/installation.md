@@ -7,7 +7,7 @@ Check the [requirements](/en/guide/requirements) first: you will need a bot toke
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/Case211/remnawave-admin.git
+git clone https://github.com/mslab-tech-dev/remnawave-admin.git
 cd remnawave-admin
 ```
 

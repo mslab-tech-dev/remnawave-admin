@@ -26,6 +26,10 @@ def _reset_cache():
 class TestFetchLatestRelease:
     """Tests for _fetch_latest_release."""
 
+    def test_release_checker_targets_fork(self):
+        assert uc.GITHUB_REPO == "mslab-tech-dev/remnawave-admin"
+        assert uc.GITHUB_API_URL == "https://api.github.com/repos/mslab-tech-dev/remnawave-admin/releases/latest"
+
     @pytest.mark.asyncio
     @patch("web.backend.core.update_checker.httpx.AsyncClient")
     async def test_success(self, mock_client_cls):
@@ -33,7 +37,7 @@ class TestFetchLatestRelease:
         mock_resp.status_code = 200
         mock_resp.json.return_value = {
             "tag_name": "v1.2.3",
-            "html_url": "https://github.com/Case211/remnawave-admin/releases/tag/v1.2.3",
+            "html_url": "https://github.com/mslab-tech-dev/remnawave-admin/releases/tag/v1.2.3",
             "body": "Changelog text",
             "published_at": "2026-02-15T10:00:00Z",
         }

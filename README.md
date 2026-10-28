@@ -8,9 +8,9 @@
 
 Пользователи, ноды, анти-абуз, почта и мониторинг — в одном месте
 
-[![Stars](https://img.shields.io/github/stars/Case211/remnawave-admin?style=flat-square&logo=github&logoColor=white&labelColor=1f2430&color=f5c518)](https://github.com/Case211/remnawave-admin/stargazers) [![Release](https://img.shields.io/github/v/release/Case211/remnawave-admin?style=flat-square&logo=github&logoColor=white&labelColor=1f2430&color=3fb950)](https://github.com/Case211/remnawave-admin/releases/latest) [![License](https://img.shields.io/badge/License-AGPL_v3-blue?style=flat-square&logo=gnu&logoColor=white)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/mslab-tech-dev/remnawave-admin?style=flat-square&logo=github&logoColor=white&labelColor=1f2430&color=f5c518)](https://github.com/mslab-tech-dev/remnawave-admin/stargazers) [![Release](https://img.shields.io/github/v/release/mslab-tech-dev/remnawave-admin?style=flat-square&logo=github&logoColor=white&labelColor=1f2430&color=3fb950)](https://github.com/mslab-tech-dev/remnawave-admin/releases/latest) [![License](https://img.shields.io/badge/License-AGPL_v3-blue?style=flat-square&logo=gnu&logoColor=white)](LICENSE)
 
-### [🌐 Сайт](https://nexuslink.ru) · [💬 Чат](https://t.me/remnawave_admin) · [🛟 Поддержка](https://t.me/rwa_moder_bot?start=support)
+### [🌐 Документация fork](https://mslab-tech-dev.github.io/remnawave-admin/) · [💬 Сообщество Remnawave](https://t.me/remnawave_admin)
 
 [English](README_EN.md) · Русский
 
@@ -19,9 +19,8 @@
 ---
 
 > [!IMPORTANT]
-> **Remnawave Admin теперь платный.** Актуальная версия развивается отдельно и работает по подписке: первые 3 недели — бесплатно и с полным набором функций, дальше помесячно, цена зависит от размера сервиса. Цена, условия и регистрация — на **[nexuslink.ru](https://nexuslink.ru)**.
+> Этот репозиторий — самостоятельно поддерживаемый fork открытой версии Remnawave Admin 5.2.0. Новые изменения и образы публикуются владельцем fork.
 >
-> Здесь осталась последняя бесплатная версия **5.2.0**. Она работает, но больше не обновляется.
 
 Панель Remnawave отвечает за пользователей и конфигурацию. Remnawave Admin берёт на себя всё остальное: собирает подключения с нод, ищет разделение подписок и торренты, принимает меры, шлёт уведомления, хранит историю и показывает, что происходит.
 
@@ -49,31 +48,21 @@
 
 ## Как начать
 
-1. Зайдите на [nexuslink.ru](https://nexuslink.ru) и войдите в личный кабинет через Telegram.
-2. Выпустите токен установки — инструкция и документация откроются там же.
-3. Поставьте админку на свой сервер с Docker, лучше отдельный от панели. Первые 3 недели — бесплатно.
+1. Склонируйте этот fork и следуйте [инструкции установки](docs/guide/installation.md).
+2. Используйте опубликованные образы `ghcr.io/mslab-tech-dev/remnawave-admin*` либо соберите их Actions fork.
+3. Документация fork: [GitHub Pages](https://mslab-tech-dev.github.io/remnawave-admin/).
 
-Вопросы — в [чат](https://t.me/remnawave_admin) или в поддержку [@rwa_moder_bot](https://t.me/rwa_moder_bot?start=support).
+Вопросы по fork — в [Issues](https://github.com/mslab-tech-dev/remnawave-admin/issues). Общий чат сообщества Remnawave: [Telegram](https://t.me/remnawave_admin).
 
-## Бесплатная версия 5.2.0
+## Основа fork
 
-Код в этом репозитории — последняя бесплатная версия. Её [документация](https://case211.github.io/remnawave-admin/) и [релиз](https://github.com/Case211/remnawave-admin/releases/tag/5.2.0) остаются на месте, но обновлений, исправлений и поддержки у неё больше не будет, pull request не принимаются.
+Fork основан на открытой версии 5.2.0 оригинального проекта. Оригинальные release notes сохранены как история исходной версии; дальнейшие обновления этого fork публикуются в [его releases](https://github.com/mslab-tech-dev/remnawave-admin/releases).
 
 ## Лицензия
 
-Код этого репозитория — GNU AGPL v3.0 с исключением для плагинов (§7), см. [LICENSE](LICENSE); версии до 2.15.x включительно остаются под MIT. Платная версия — отдельный продукт, её условия — в [пользовательском соглашении](https://nexuslink.ru/terms.html).
-
-## Поддержать
-
-TON `UQDDe-jyFTbQsPHqyojdFeO1_m7uPF-q1w0g_MfbSOd3l1sC`
-USDT TRC20 `TGyHJj2PsYSUwkBbWdc7BFfsAxsE6SGGJP`
-BTC `1J6Zz7XcrpFkchwFmuU5WTFYTxziBdSwRz`
+Код этого репозитория — GNU AGPL v3.0 с исключением для плагинов (§7), см. [LICENSE](LICENSE); версии до 2.15.x включительно остаются под MIT.
 
 <div align="center">
-
-<a href="https://github.com/Case211/remnawave-admin/stargazers">
-  <img src="docs/star-history.svg" alt="История звёзд" width="640" />
-</a>
 
 Сделано для сообщества Remnawave
 

@@ -137,6 +137,47 @@ struct {
 } rws_stats SEC(".maps");
 
 enum { ST_DELAYED, ST_DROPPED_DOWN, ST_DROPPED_UP, ST_PENALTIES };
+enum { CDN_SHAPE = 1, CDN_DROP = 2 };
+
+/* Действие CDN-inbound: общий потолок на порт либо полный drop. */
+struct cdn_policy {
+	__u64 down_rate;
+	__u64 up_rate;
+	__u64 action;           /* 1 — shape, 2 — drop */
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 64);
+	__type(key, __u16);
+	__type(value, struct cdn_policy);
+} rws_cdn_rules SEC(".maps");
+
+/* Только подтверждённые немобильные IPv4, к которым применяется политика. */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 16384);
+	__type(key, struct client_key);
+	__type(value, __u8);
+} rws_cdn_clients SEC(".maps");
+
+struct cdn_flow_key {
+	struct client_key client;
+	__u16 port;
+	__u16 pad;
+};
+
+struct cdn_flow_state {
+	__u64 down_last;
+	__u64 up_next;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 65536);
+	__type(key, struct cdn_flow_key);
+	__type(value, struct cdn_flow_state);
+} rws_cdn_states SEC(".maps");
 
 static __always_inline void stat_inc(int which)
 {
@@ -213,6 +254,24 @@ static __always_inline struct client_state *client(struct client_key *key, __u64
 	return bpf_map_lookup_elem(&rws_clients, key);
 }
 
+static __always_inline struct cdn_flow_state *cdn_client_state(
+		struct client_key *client_key, __u16 port, __u64 now)
+{
+	struct cdn_flow_key key = {};
+	struct cdn_flow_state fresh = {};
+	struct cdn_flow_state *state;
+
+	__builtin_memcpy(&key.client, client_key, sizeof(key.client));
+	key.port = port;
+	state = bpf_map_lookup_elem(&rws_cdn_states, &key);
+	if (state)
+		return state;
+	fresh.down_last = now;
+	fresh.up_next = now;
+	bpf_map_update_elem(&rws_cdn_states, &key, &fresh, BPF_NOEXIST);
+	return bpf_map_lookup_elem(&rws_cdn_states, &key);
+}
+
 /* Меньший из двух потолков; 0 — «без лимита» и в сравнении не участвует. */
 static __always_inline __u64 min_rate(__u64 a, __u64 b)
 {
@@ -285,14 +344,16 @@ static __always_inline __u64 pick_rate(const struct shaper_cfg *cfg, struct clie
 SEC("tc")
 int rws_egress(struct __sk_buff *skb)
 {
+	struct cdn_policy *cdn;
 	struct personal_limit *personal;
 	struct client_key key = {};
 	struct client_state *st;
+	struct cdn_flow_state *cdn_st = NULL;
 	struct shaper_cfg *cfg;
-	__u64 now, rate, delay, t, t_next;
+	__u64 now, rate, t, t_next, general, cdn_rate, cdn_next;
 	__u32 zero = 0;
 	__u16 port;
-	int on_port;
+	int on_port, cdn_client;
 
 	cfg = bpf_map_lookup_elem(&rws_cfg, &zero);
 	if (!cfg)
@@ -302,34 +363,58 @@ int rws_egress(struct __sk_buff *skb)
 	personal = bpf_map_lookup_elem(&rws_personal, &key);
 	on_port = bpf_map_lookup_elem(&rws_ports, &port) != NULL;
 	barrier_var(on_port);
-	if (!personal && !on_port)
+	cdn = bpf_map_lookup_elem(&rws_cdn_rules, &port);
+	cdn_client = bpf_map_lookup_elem(&rws_cdn_clients, &key) != NULL;
+	barrier_var(cdn_client);
+	if (!personal && !on_port && !cdn)
 		return TC_ACT_UNSPEC;
+	if (cdn && cdn_client && cdn->action == CDN_DROP)
+		return TC_ACT_SHOT;
 
 	now = bpf_ktime_get_ns();
 	st = client(&key, now);
 	if (!st)
 		return TC_ACT_UNSPEC;
+	if (cdn && cdn_client) {
+		cdn_st = cdn_client_state(&key, port, now);
+		if (!cdn_st)
+			return TC_ACT_UNSPEC;
+	}
 
-	rate = pick_rate(cfg, st, &key, now, skb->len, on_port ? cfg->down_rate : 0,
+	general = on_port ? cfg->down_rate : 0;
+	rate = pick_rate(cfg, st, &key, now, skb->len, general,
 			 personal ? personal->down_rate : 0, on_port);
-	if (!rate)
+	cdn_rate = cdn && cdn_client ? cdn->down_rate : 0;
+	if (!rate && !cdn_rate)
 		return TC_ACT_UNSPEC;
 
 	/* Своё время отправки мог назначить и TCP — берём более позднее */
 	t = skb->tstamp;
 	if (t < now)
 		t = now;
-	delay = (__u64)skb->len * NSEC_PER_SEC / rate;
-	t_next = st->down_last + delay;
-	if (t_next <= t) {
-		st->down_last = t;
-		return TC_ACT_UNSPEC;
+	t_next = t;
+	if (rate) {
+		__u64 base_next = st->down_last + (__u64)skb->len * NSEC_PER_SEC / rate;
+		if (base_next <= t)
+			base_next = t;
+		st->down_last = base_next;
+		if (base_next > t_next)
+			t_next = base_next;
 	}
+	if (cdn_rate) {
+		cdn_next = cdn_st->down_last + (__u64)skb->len * NSEC_PER_SEC / cdn_rate;
+		if (cdn_next <= t)
+			cdn_next = t;
+		cdn_st->down_last = cdn_next;
+		if (cdn_next > t_next)
+			t_next = cdn_next;
+	}
+	if (t_next <= t)
+		return TC_ACT_UNSPEC;
 	if (t_next - now >= cfg->horizon_ns) {
 		stat_inc(ST_DROPPED_DOWN);
 		return TC_ACT_SHOT;
 	}
-	st->down_last = t_next;
 	skb->tstamp = t_next;
 	stat_inc(ST_DELAYED);
 	return TC_ACT_UNSPEC;
@@ -338,14 +423,16 @@ int rws_egress(struct __sk_buff *skb)
 SEC("tc")
 int rws_ingress(struct __sk_buff *skb)
 {
+	struct cdn_policy *cdn;
 	struct personal_limit *personal;
 	struct client_key key = {};
 	struct client_state *st;
+	struct cdn_flow_state *cdn_st = NULL;
 	struct shaper_cfg *cfg;
-	__u64 now, rate, t;
+	__u64 now, rate, general, cdn_rate, cdn_next, base_next;
 	__u32 zero = 0;
 	__u16 port;
-	int on_port;
+	int on_port, cdn_client;
 
 	cfg = bpf_map_lookup_elem(&rws_cfg, &zero);
 	if (!cfg)
@@ -355,27 +442,48 @@ int rws_ingress(struct __sk_buff *skb)
 	personal = bpf_map_lookup_elem(&rws_personal, &key);
 	on_port = bpf_map_lookup_elem(&rws_ports, &port) != NULL;
 	barrier_var(on_port);
-	if (!personal && !on_port)
+	cdn = bpf_map_lookup_elem(&rws_cdn_rules, &port);
+	cdn_client = bpf_map_lookup_elem(&rws_cdn_clients, &key) != NULL;
+	barrier_var(cdn_client);
+	if (!personal && !on_port && !cdn)
 		return TC_ACT_UNSPEC;
+	if (cdn && cdn_client && cdn->action == CDN_DROP)
+		return TC_ACT_SHOT;
 
 	now = bpf_ktime_get_ns();
 	st = client(&key, now);
 	if (!st)
 		return TC_ACT_UNSPEC;
+	if (cdn && cdn_client) {
+		cdn_st = cdn_client_state(&key, port, now);
+		if (!cdn_st)
+			return TC_ACT_UNSPEC;
+	}
 
-	rate = pick_rate(cfg, st, &key, now, skb->len, on_port ? cfg->up_rate : 0,
+	general = on_port ? cfg->up_rate : 0;
+	rate = pick_rate(cfg, st, &key, now, skb->len, general,
 			 personal ? personal->up_rate : 0, on_port);
-	if (!rate)
+	cdn_rate = cdn && cdn_client ? cdn->up_rate : 0;
+	if (!rate && !cdn_rate)
 		return TC_ACT_UNSPEC;
 
-	t = st->up_next;
-	if (t < now)
-		t = now;
-	if (t - now > cfg->burst_ns) {
-		stat_inc(ST_DROPPED_UP);
-		return TC_ACT_SHOT;
+	base_next = now;
+	if (rate) {
+		base_next = st->up_next > now ? st->up_next : now;
+		base_next += (__u64)skb->len * NSEC_PER_SEC / rate;
+		if (base_next - now > cfg->burst_ns)
+			return TC_ACT_SHOT;
 	}
-	st->up_next = t + (__u64)skb->len * NSEC_PER_SEC / rate;
+	if (cdn_rate) {
+		cdn_next = cdn_st->up_next > now ? cdn_st->up_next : now;
+		cdn_next += (__u64)skb->len * NSEC_PER_SEC / cdn_rate;
+		if (cdn_next - now > cfg->burst_ns)
+			return TC_ACT_SHOT;
+	}
+	if (rate)
+		st->up_next = base_next;
+	if (cdn_rate)
+		cdn_st->up_next = cdn_next;
 	return TC_ACT_UNSPEC;
 }
 

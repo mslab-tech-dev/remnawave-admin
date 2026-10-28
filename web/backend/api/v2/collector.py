@@ -74,6 +74,9 @@ _violation_semaphore = asyncio.Semaphore(3)
 # часами, по стартам в одно окно не попадали. В базу карта не пишется —
 # это была бы та самая ежецикловая перезапись, от которой мы ушли.
 _activity: dict[str, dict[str, list]] = {}
+# Отдельный адресный снимок по inbound: общий activity cache используется
+# детектором и намеренно остаётся совместимым с прежней схемой.
+_cdn_activity: dict[str, dict[str, dict[str, datetime]]] = {}
 _ACTIVITY_WINDOW_MINUTES = 5    # без новых записей в логе дольше — соединение не живое
 _ACTIVITY_TTL_MINUTES = 30      # дольше — адрес выбрасывается из карты
 _ACTIVITY_SWEEP_SECONDS = 300
@@ -97,6 +100,12 @@ def _note_activity(batch: list) -> None:
         else:
             rec[1] = max(rec[1], seen)
             rec[2] = c.get("node_uuid") or rec[2]
+        node = str(c.get("node_uuid") or "").lower()
+        device_info = c.get("device_info") or {}
+        inbound_tag = str(c.get("inbound_tag") or device_info.get("inbound_tag") or "")
+        if node and inbound_tag:
+            addresses = _cdn_activity.setdefault(node, {}).setdefault(inbound_tag, {})
+            addresses[c["ip_address"]] = max(addresses.get(c["ip_address"], seen), seen)
 
 
 def _live_connections(user_uuids) -> Dict[str, list]:
@@ -115,6 +124,33 @@ def _live_connections(user_uuids) -> Dict[str, list]:
     }
 
 
+def live_ips_by_node(node_uuids) -> Dict[str, list[str]]:
+    """Свежие клиентские IPv4/IPv6 из activity cache, разложенные по нодам."""
+    selected = {str(node).lower() for node in node_uuids}
+    horizon = datetime.utcnow() - timedelta(minutes=_ACTIVITY_WINDOW_MINUTES)
+    by_node: dict[str, set[str]] = {node: set() for node in selected}
+    for connections in _activity.values():
+        for ip, (_first, last, node_uuid) in connections.items():
+            node = str(node_uuid or "").lower()
+            if node in selected and last >= horizon:
+                by_node[node].add(ip)
+    return {node: sorted(ips) for node, ips in by_node.items()}
+
+
+def live_cdn_ips_by_node(node_tags: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
+    """Свежие клиентские адреса по выбранным inbound tags на каждой ноде."""
+    horizon = datetime.utcnow() - timedelta(minutes=_ACTIVITY_WINDOW_MINUTES)
+    result: dict[str, dict[str, list[str]]] = {}
+    for node_uuid, tags in node_tags.items():
+        node = str(node_uuid).lower()
+        active = _cdn_activity.get(node, {})
+        result[node] = {
+            tag: sorted(ip for ip, last in active.get(tag, {}).items() if last >= horizon)
+            for tag in tags
+        }
+    return result
+
+
 def _sweep_activity(now: datetime) -> None:
     """Выбросить адреса, о которых давно не слышно, чтобы карта не росла без потолка."""
     global _last_activity_sweep
@@ -128,6 +164,15 @@ def _sweep_activity(now: datetime) -> None:
             del ips[ip]
         if not ips:
             del _activity[uid]
+    horizon = now - timedelta(minutes=_ACTIVITY_TTL_MINUTES)
+    for node in list(_cdn_activity):
+        tags = _cdn_activity[node]
+        for tag in list(tags):
+            tags[tag] = {ip: seen for ip, seen in tags[tag].items() if seen >= horizon}
+            if not tags[tag]:
+                del tags[tag]
+        if not tags:
+            del _cdn_activity[node]
 
 # ── Violation detection queue ──────────────────────────────
 # Instead of spawning a task per batch, accumulate user UUIDs in a set

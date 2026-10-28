@@ -56,7 +56,7 @@ GitHub ограничивает частоту скачиваний с `raw.gith
 Проверить, в лимите ли вы:
 
 ```bash
-curl -sI https://raw.githubusercontent.com/Case211/remnawave-admin/main/node-agent/install.sh | head -1
+curl -sI https://raw.githubusercontent.com/mslab-tech-dev/remnawave-admin/main/node-agent/install.sh | head -1
 ```
 
 `HTTP/2 200` — всё в порядке, `HTTP/2 429` — лимит ещё держится.
@@ -101,4 +101,4 @@ tail -100 ./logs/adminbot_INFO.log
 
 ## Куда идти дальше
 
-Если ничего из перечисленного не подошло — [issues на GitHub](https://github.com/Case211/remnawave-admin/issues) или [чат в Telegram](https://t.me/remnawave_admin). К вопросу сразу приложите версию панели, кусок логов и то, что уже пробовали: это экономит один круг переписки.
+Если ничего из перечисленного не подошло — [issues fork на GitHub](https://github.com/mslab-tech-dev/remnawave-admin/issues) или [чат в Telegram](https://t.me/remnawave_admin). К вопросу сразу приложите версию панели, кусок логов и то, что уже пробовали: это экономит один круг переписки.

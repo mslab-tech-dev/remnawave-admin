@@ -433,7 +433,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
             <Tooltip delayDuration={0}>
               <TooltipTrigger asChild>
                 <a
-                  href="https://github.com/case211/remnawave-admin"
+                  href="https://github.com/mslab-tech-dev/remnawave-admin"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center justify-center py-1.5 text-dark-300 hover:text-white transition-colors"
@@ -459,7 +459,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
             <Tooltip delayDuration={0}>
               <TooltipTrigger asChild>
                 <a
-                  href="https://github.com/case211/remnawave-admin#-поддержка"
+                  href="https://github.com/mslab-tech-dev/remnawave-admin/issues"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center justify-center py-1.5 text-dark-300 hover:text-primary-400 transition-colors"
@@ -473,7 +473,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         ) : (
           <>
             <a
-              href="https://github.com/case211/remnawave-admin"
+              href="https://github.com/mslab-tech-dev/remnawave-admin"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-2 py-1.5 text-xs text-dark-300 hover:text-white transition-colors rounded-md hover:bg-[var(--glass-bg)]"
@@ -491,7 +491,7 @@ export default function Sidebar({ mobileOpen, onClose }: SidebarProps) {
               <span>{t('sidebar.telegramChat')}</span>
             </a>
             <a
-              href="https://github.com/case211/remnawave-admin#-поддержка"
+              href="https://github.com/mslab-tech-dev/remnawave-admin/issues"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-2 py-1.5 text-xs text-dark-300 hover:text-primary-400 transition-colors rounded-md hover:bg-[var(--glass-bg)]"

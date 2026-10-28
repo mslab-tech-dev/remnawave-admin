@@ -618,7 +618,7 @@ function AgentTokenModal({
   const wsUrl = backendUrl.replace(/^http/, 'ws')
 
   const envConfig = generatedToken
-    ? `AGENT_NODE_UUID=${node.uuid}\nAGENT_AUTH_TOKEN=${generatedToken}\nAGENT_COLLECTOR_URL=${backendUrl}\nAGENT_WS_URL=${wsUrl}\nAGENT_COMMAND_ENABLED=true`
+    ? `AGENT_NODE_UUID=${node.uuid}\nAGENT_AUTH_TOKEN=${generatedToken}\nAGENT_COLLECTOR_URL=${backendUrl}\nAGENT_WS_URL=${wsUrl}\nAGENT_COMMAND_ENABLED=true\nAGENT_CDN_SHAPING_ENABLED=true`
     : null
 
   return (

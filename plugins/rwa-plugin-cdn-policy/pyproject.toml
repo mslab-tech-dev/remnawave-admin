@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rwa-plugin-cdn-policy"
+version = "0.1.0"
+description = "Per-inbound CDN shaping/drop policy for Remnawave Admin"
+requires-python = ">=3.11"
+dependencies = ["fastapi>=0.110", "pydantic>=2.5"]
+
+[project.entry-points."rwa.plugin"]
+cdn_policy = "rwa_plugin_cdn_policy:manifest"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rwa_plugin_cdn_policy*"]
+
+[tool.setuptools.package-data]
+rwa_plugin_cdn_policy = ["static/*.js"]

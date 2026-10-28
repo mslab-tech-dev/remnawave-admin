@@ -9,7 +9,11 @@ services:
   # ===========================================
 
   bot:
-    image: ghcr.io/case211/remnawave-admin:dev
+    image: ghcr.io/mslab-tech-dev/remnawave-admin:dev
+    # Локальная сборка: тега :dev в GHCR форка может не быть.
+    build:
+      context: .
+      dockerfile: ./Dockerfile
     restart: unless-stopped
     env_file:
       - .env
@@ -78,7 +82,10 @@ services:
   # ===========================================
 
   web-backend:
-    image: ghcr.io/case211/remnawave-admin-web-backend:dev
+    image: ghcr.io/mslab-tech-dev/remnawave-admin-web-backend:dev
+    build:
+      context: .
+      dockerfile: ./web/backend/Dockerfile
     container_name: remnawave-web-backend
     restart: unless-stopped
     env_file:
@@ -106,7 +113,10 @@ services:
       start_period: 120s
 
   web-frontend:
-    image: ghcr.io/case211/remnawave-admin-web-frontend:dev
+    image: ghcr.io/mslab-tech-dev/remnawave-admin-web-frontend:dev
+    build:
+      context: ./web/frontend
+      dockerfile: ./Dockerfile
     container_name: remnawave-web-frontend
     restart: unless-stopped
     env_file:

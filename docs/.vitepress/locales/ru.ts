@@ -11,10 +11,10 @@ export const ru: LocaleSpecificConfig<DefaultTheme.Config> = {
       {
         text: 'Ссылки',
         items: [
-          { text: 'Релизы на GitHub', link: 'https://github.com/Case211/remnawave-admin/releases' },
+          { text: 'Релизы fork на GitHub', link: 'https://github.com/mslab-tech-dev/remnawave-admin/releases' },
           { text: 'Обновления в Telegram', link: 'https://t.me/remnawave_admin/3032' },
           { text: 'Чат в Telegram', link: 'https://t.me/remnawave_admin' },
-          { text: 'Issues', link: 'https://github.com/Case211/remnawave-admin/issues' },
+          { text: 'Issues', link: 'https://github.com/mslab-tech-dev/remnawave-admin/issues' },
         ],
       },
     ],
@@ -116,7 +116,7 @@ export const ru: LocaleSpecificConfig<DefaultTheme.Config> = {
     },
 
     editLink: {
-      pattern: 'https://github.com/Case211/remnawave-admin/edit/main/docs/:path',
+      pattern: 'https://github.com/mslab-tech-dev/remnawave-admin/edit/main/docs/:path',
       text: 'Предложить правку',
     },
     lastUpdatedText: 'Обновлено',

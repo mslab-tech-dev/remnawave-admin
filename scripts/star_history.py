@@ -153,7 +153,7 @@ def render_svg(dates: list[datetime], repo: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", default="Case211/remnawave-admin")
+    parser.add_argument("--repo", default="mslab-tech-dev/remnawave-admin")
     parser.add_argument("--out", default="docs/star-history.svg")
     args = parser.parse_args()
 

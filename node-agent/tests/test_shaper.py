@@ -102,6 +102,89 @@ class TestEncoding:
         assert "rws_ports key hex bb 01 value hex 01" in script
 
 
+class TestCdnLabels:
+    @pytest.mark.parametrize("ip,expected", [
+        ("5.165.208.52", "fd 00 00 01 00 00 00 00 00 05 01 65 02 08 00 52"),
+        ("82.200.17.67", "fd 00 00 01 00 00 00 00 00 82 02 00 00 17 00 67"),
+        ("178.177.222.58", "fd 00 00 01 00 00 00 00 01 78 01 77 02 22 00 58"),
+        ("1.2.3.4", "fd 00 00 01 00 00 00 00 00 01 00 02 00 03 00 04"),
+        ("10.0.0.1", "fd 00 00 01 00 00 00 00 00 10 00 00 00 00 00 01"),
+        ("255.255.255.255", "fd 00 00 01 00 00 00 00 02 55 02 55 02 55 02 55"),
+    ])
+    def test_cdn_label_key_vectors(self, ip, expected):
+        assert shaper._hex(shaper.cdn_label_key(ip)) == expected
+
+    def test_cdn_label_key_is_injective_for_each_octet(self):
+        keys = {shaper.cdn_label_key(f"{octet}.{octet}.{octet}.{octet}")
+                for octet in range(256)}
+        assert len(keys) == 256
+
+    def test_cdn_label_key_matches_nginx_text_form(self):
+        ip = "5.165.208.52"
+        label = "fd00:1::5:165:208:52"
+        assert shaper.cdn_label_key(ip) == __import__("ipaddress").IPv6Address(label).packed
+
+    def test_ipv6_clients_have_no_label(self):
+        assert shaper.cdn_label_key("2001:db8::1") is None
+        rules, skipped = shaper.cdn_personal({"2001:db8::1": 1024})
+        assert rules == {}
+        assert skipped == 1
+
+    def test_cdn_personal_translates_ipv4_and_counts_ipv6(self):
+        rules, skipped = shaper.cdn_personal({
+            "5.165.208.52": 512,
+            "2001:db8::1": 1024,
+        })
+        assert rules == {"fd00:1::5:165:208:52": 512}
+        assert skipped == 1
+
+    def test_cdn_policy_parses_shape_and_drop(self):
+        rules, skipped = shaper.parse_cdn_policy([
+            {"port": 4446, "action": "shape", "rate_kbit": 1024},
+            {"port": 4445, "action": "drop"},
+            {"port": 4444, "action": "other"},
+        ])
+        assert rules == {
+            4446: (shaper.CDN_SHAPE, 1024),
+            4445: (shaper.CDN_DROP, 0),
+        }
+        assert skipped == 1
+
+    def test_policy_clients_accept_only_ipv4(self):
+        ips, skipped = shaper.parse_cdn_clients(["1.2.3.4", "2001:db8::1", "bad"])
+        assert ips == {"1.2.3.4"}
+        assert skipped == 2
+
+    def test_cdn_policy_encoding_uses_one_rate_in_both_directions(self):
+        assert struct.unpack("<3Q", shaper.encode_cdn_policy(shaper.CDN_SHAPE, 1024)) == (
+            1024 * 125, 1024 * 125, shaper.CDN_SHAPE,
+        )
+        assert struct.unpack("<3Q", shaper.encode_cdn_policy(shaper.CDN_DROP)) == (
+            0, 0, shaper.CDN_DROP,
+        )
+
+    def test_apply_and_update_use_isolated_pins_and_lo_keys(self):
+        apply = shaper.build_cdn_apply_script(
+            {"1.2.3.4": 512}, {4446: (shaper.CDN_SHAPE, 1024)}, {"5.6.7.8"},
+        )
+        assert shaper.CDN_PIN_DIR in apply
+        assert "IFACE=\"lo\"" in apply
+        assert 'CFG="0e 00 00 00 00 00 00 00' in apply
+        assert "rws_cdn_rules key hex 5e 11" in apply
+        assert "rws_cdn_clients key hex" in apply
+        assert apply.index("rws_cdn_rules key") < apply.index("bpf da pinned")
+
+        update = shaper.build_cdn_update_script(rules_set={4446: (shaper.CDN_DROP, 0)})
+        assert f"exit {shaper.RELOAD_EXIT}" in update
+        assert "map update pinned" in update
+
+    def test_cdn_disable_only_removes_owned_filters_and_root(self):
+        script = shaper.build_cdn_disable_script()
+        assert f"pref {shaper.SHAPER_PREF}" in script
+        assert f'"{shaper.CDN_ROOT_HANDLE}"' in script
+        assert f"umount {shaper.CDN_PIN_DIR}" in script
+
+
 class TestApplyScript:
     def test_previous_install_is_removed_only_if_it_is_ours(self):
         script = shaper.build_apply_script(cfg())
@@ -188,6 +271,14 @@ class TestDisableScript:
     shaper.build_apply_script(cfg(ports=[443, 8443],
                                   penalty={"enabled": True, "mb": 1, "window_sec": 10, "kbit": 64, "minutes": 1})),
     shaper.build_disable_script(),
+    shaper.build_cdn_apply_script(
+        {"1.2.3.4": 512}, {4446: (shaper.CDN_SHAPE, 1024)}, {"5.6.7.8"},
+    ),
+    shaper.build_cdn_update_script(
+        {"1.2.3.4": 512}, ["9.9.9.9"], {4446: (shaper.CDN_DROP, 0)}, [4445],
+        ["5.6.7.8"], ["7.7.7.7"],
+    ),
+    shaper.build_cdn_disable_script(),
 ])
 def test_scripts_are_valid_posix_shell(script):
     """В контейнере агента скрипт исполняет /bin/sh — у Debian это dash."""
@@ -231,11 +322,15 @@ class TestSummary:
 
 def runner():
     r = CommandRunner.__new__(CommandRunner)
-    r._settings = MagicMock(host_mode=False)
+    r._settings = MagicMock(host_mode=False, cdn_shaping_enabled=False)
     r._shaper_general = shaper.DISABLED
     r._shaper_personal = {}
     r._shaper_loaded = False
     r._shaper_state = None
+    r._cdn_personal = {}
+    r._cdn_rules = {}
+    r._cdn_clients = set()
+    r._cdn_loaded = False
     r._run_hostnet = AsyncMock(return_value=("IFACE=ens3\nROOT=kept:fq\nACTIVE=1\n", 0))
     r._send = AsyncMock()
     return r
@@ -318,3 +413,72 @@ class TestCommand:
         reply = r._send.await_args.args[0]
         assert reply["status"] == "error"
         assert json.loads(reply["output"])["active"] is False
+
+
+class TestCdnCommand:
+    @pytest.mark.asyncio
+    async def test_cdn_policy_is_rejected_when_opt_in_is_disabled(self):
+        r = runner()
+        await r._set_cdn_policy({"command_id": "cdn-policy", "rules": []})
+        r._run_hostnet.assert_not_awaited()
+        assert r._send.await_args.args[0]["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_first_policy_installs_only_confirmed_non_mobile_clients(self):
+        r = runner()
+        r._settings.cdn_shaping_enabled = True
+        await r._set_cdn_policy({
+            "command_id": "cdn-policy",
+            "rules": [{"port": 4446, "action": "shape", "rate_kbit": 1024}],
+            "non_mobile_ips": ["5.165.208.52", "2001:db8::1"],
+        })
+
+        script = r._run_hostnet.await_args.args[0]
+        assert "rws_cdn_rules key hex 5e 11" in script
+        assert "rws_cdn_clients key hex fd 00 00 01" in script
+        assert "2001:db8::1" not in script
+        assert r._cdn_clients == {"5.165.208.52"}
+
+    @pytest.mark.asyncio
+    async def test_policy_update_changes_only_map_entries(self):
+        r = runner()
+        r._settings.cdn_shaping_enabled = True
+        r._cdn_loaded = True
+        r._cdn_rules = {4446: (shaper.CDN_SHAPE, 1024)}
+        r._cdn_applied_rules = dict(r._cdn_rules)
+        r._cdn_applied_personal = {}
+        r._cdn_applied_clients = set()
+        r._run_hostnet = AsyncMock(return_value=("UPDATED=1\n", 0))
+
+        await r._set_cdn_policy({
+            "command_id": "cdn-policy",
+            "rules": [{"port": 4446, "action": "drop"}],
+            "non_mobile_ips": ["1.2.3.4"],
+        })
+
+        script = r._run_hostnet.await_args.args[0]
+        assert "prog loadall" not in script
+        assert "rws_cdn_rules key" in script
+        assert "rws_cdn_clients key" in script
+
+    @pytest.mark.asyncio
+    async def test_personal_throttle_sync_also_updates_cdn_map(self):
+        r = runner()
+        r._settings.cdn_shaping_enabled = True
+        await r._sync_throttled_ips({"rules": [{"ip": "5.165.208.52", "rate_kbit": 512}]})
+
+        assert r._run_hostnet.await_count == 2
+        cdn_script = r._run_hostnet.await_args_list[1].args[0]
+        assert "rws_personal key hex fd 00 00 01" in cdn_script
+
+    @pytest.mark.asyncio
+    async def test_cdn_failure_is_reported_without_hiding_eth0_success(self):
+        r = runner()
+        r._settings.cdn_shaping_enabled = True
+        r._run_hostnet = AsyncMock(side_effect=[("ETH0=OK\n", 0), ("ERROR=lo failed\n", 1)])
+        await r._sync_throttled_ips({"command_id": "throttle", "rules": [{"ip": "1.2.3.4", "rate_kbit": 512}]})
+
+        result = r._send.await_args.args[0]
+        assert result["status"] == "error"
+        assert "ETH0=OK" in result["output"]
+        assert "CDN:" in result["output"]

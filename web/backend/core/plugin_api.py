@@ -331,6 +331,122 @@ def geoip_service():
     return get_geoip_service()
 
 
+async def live_ips_by_node(node_uuids: list[str]) -> dict[str, list[str]]:
+    """Свежие клиентские IP по нодам; адреса старше окна активности не выдаются."""
+    from web.backend.api.v2.collector import live_ips_by_node as _live_ips_by_node
+    return _live_ips_by_node(node_uuids)
+
+
+async def live_cdn_ips_by_node(node_tags: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
+    """Свежие адреса клиентов на указанных inbound tags, сгруппированные по нодам."""
+    from web.backend.api.v2.collector import live_cdn_ips_by_node as _live_cdn_ips_by_node
+    return _live_cdn_ips_by_node(node_tags)
+
+
+async def classify_mobile_ips(ip_addresses: list[str]) -> dict[str, Optional[bool]]:
+    """Классифицировать IP текущим алгоритмом: True/False или None при неизвестности."""
+    from shared.analyzers.networks import is_mobile_network
+
+    try:
+        metadata = await geoip_service().lookup_batch(ip_addresses)
+    except Exception:
+        logging.getLogger(__name__).warning("plugin_api.geoip_lookup_failed", exc_info=True)
+        return {ip: None for ip in ip_addresses}
+    result: dict[str, Optional[bool]] = {}
+    for ip in ip_addresses:
+        meta = metadata.get(ip)
+        if meta is None:
+            result[ip] = None
+            continue
+        if isinstance(meta, dict):
+            org = meta.get("asn_org")
+            connection_type = meta.get("connection_type")
+        else:
+            org = getattr(meta, "asn_org", None)
+            connection_type = getattr(meta, "connection_type", None)
+        if not org and (not connection_type or connection_type == "unknown"):
+            result[ip] = None
+            continue
+        result[ip] = is_mobile_network(org, connection_type)
+    return result
+
+
+async def panel_nodes_with_inbounds() -> list[dict]:
+    """Ноды Panel API с внешними inbound UUID/tag/port для UI плагинов."""
+    from shared.api_client import api_client
+
+    response = await api_client.get_nodes()
+    data = response.get("response", response) if isinstance(response, dict) else {}
+    nodes = data.get("nodes", data) if isinstance(data, dict) else data
+    result = []
+    for node in nodes if isinstance(nodes, list) else []:
+        if not isinstance(node, dict):
+            continue
+        node_uuid = str(node.get("uuid") or "")
+        try:
+            full = await api_client.get_node(node_uuid) if node_uuid else {}
+            node = full.get("response", full) if isinstance(full, dict) else node
+        except Exception:
+            pass
+        profile = node.get("configProfile") or {}
+        inbounds = []
+        for inbound in profile.get("activeInbounds") or []:
+            raw = inbound.get("rawInbound") or {}
+            listen = str(raw.get("listen") or "0.0.0.0").strip().lower()
+            port = raw.get("port", inbound.get("port"))
+            if listen != "::1" or not isinstance(port, int):
+                continue
+            if 0 < port < 65536:
+                inbounds.append({
+                    "uuid": inbound.get("uuid"),
+                    "tag": inbound.get("tag") or raw.get("tag") or f"inbound:{port}",
+                    "port": port,
+                })
+        result.append({
+            "uuid": node_uuid,
+            "name": str(node.get("name") or node_uuid),
+            "inbounds": inbounds,
+        })
+    return result
+
+
+async def push_cdn_policy(
+    node_uuid: str,
+    rules: list[dict],
+    non_mobile_ips: list[str],
+) -> bool:
+    """Подписанно заменить CDN-политику на агенте указанной ноды."""
+    from shared.database import db_service
+    from web.backend.core.agent_hmac import sign_command_with_ts
+    from web.backend.core.agent_manager import agent_manager
+
+    if not agent_manager.is_connected(node_uuid):
+        return False
+    async with db_service.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT agent_token, agent_version FROM nodes WHERE uuid = $1::uuid", node_uuid,
+        )
+    if not row or not row["agent_token"]:
+        return False
+    version = []
+    for part in str(row["agent_version"] or "").split("."):
+        digits = "".join(char for char in part if char.isdigit())
+        if not digits:
+            break
+        version.append(int(digits))
+    if tuple(version) < (1, 10, 0):
+        return False
+    command = {
+        "type": "set_cdn_policy",
+        "command_id": "plugin:cdn_policy:policy",
+        "rules": rules,
+        "non_mobile_ips": non_mobile_ips,
+    }
+    payload, signature = sign_command_with_ts(command, row["agent_token"])
+    payload["_sig"] = signature
+    return await agent_manager.send_command(node_uuid, payload)
+
+
 PLUGIN_ACTION_PREFIX = "pact"
 # Предел Telegram на callback_data — 64 байта. Кнопка длиннее не отправится
 # вовсе и утащит с собой всё сообщение, поэтому режем её здесь.
@@ -435,6 +551,12 @@ def auth_deps():
     """
     from web.backend.api.deps import AdminUser, require_permission
     return AdminUser, require_permission
+
+
+async def check_node_access(admin: Any, node_uuid: str, action: str) -> bool:
+    """Проверить node-scope RBAC плагинного запроса."""
+    from web.backend.core.rbac import check_access
+    return await check_access(admin, "node", node_uuid, action)
 
 
 def build_context(plugin_id: str) -> PluginContext:

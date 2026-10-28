@@ -38,7 +38,7 @@ Xray, а по желанию ещё и разбором трафика чере�
 
 ```bash
 curl -fsSL --retry 3 --retry-delay 2 \
-  https://raw.githubusercontent.com/Case211/remnawave-admin/main/node-agent/install.sh \
+  https://raw.githubusercontent.com/mslab-tech-dev/remnawave-admin/main/node-agent/install.sh \
   -o /tmp/rwa-node-agent-install.sh \
   && bash /tmp/rwa-node-agent-install.sh --uuid UUID --url URL --token TOKEN
 ```
@@ -85,7 +85,7 @@ curl -fsSL --retry 3 --retry-delay 2 \
 mkdir -p /opt/remnawave-node-agent && cd /opt/remnawave-node-agent
 
 # Скачайте docker-compose.yml
-curl -fsSLO --retry 3 --retry-delay 2 https://raw.githubusercontent.com/Case211/remnawave-admin/main/node-agent/docker-compose.yml
+curl -fsSLO --retry 3 --retry-delay 2 https://raw.githubusercontent.com/mslab-tech-dev/remnawave-admin/main/node-agent/docker-compose.yml
 
 # Создайте .env
 nano .env
@@ -123,7 +123,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-Агент автоматически скачает готовый образ из GHCR (`ghcr.io/case211/remnawave-admin-node-agent:latest`).
+Агент автоматически скачает образ fork из GHCR (`ghcr.io/mslab-tech-dev/remnawave-admin-node-agent:latest`).
 
 ### Проверка
 
@@ -276,6 +276,62 @@ nDPI видит трафик уже после NAT — от имени ноды,
 
 ---
 
+## Политика CDN-inbound
+
+Агент 1.10.0 может применять к выбранным CDN-inbound’ам отдельную политику:
+ограничивать немобильные IPv4-клиенты до общей скорости или полностью
+отбрасывать их пакеты. Прямые inbound’ы, включая REALITY, этой политикой не
+затрагиваются. Персональные лимиты скорости остаются независимыми.
+
+Политика задаётся в плагине **CDN Policy** отдельно по каждому inbound’у.
+Мобильные адреса и адреса без успешной GeoIP-классификации проходят без этого
+общего ограничения или drop; классификация повторяется фоновым циклом. IPv6
+клиенты за CDN пока не маркируются и остаются вне политики.
+
+Включите на CDN-ноде:
+
+```env
+AGENT_COMMAND_ENABLED=true
+AGENT_CDN_SHAPING_ENABLED=true
+```
+
+Для каждого выбираемого CDN-inbound Xray должен слушать на `[::1]`, а nginx
+должен подключаться к нему с `proxy_bind`-меткой `fd00:1::/64`, построенной из
+реального IPv4 клиента. Например:
+
+```nginx
+map $remote_addr $loop_src {
+  ~^(?<o1>\d+)\.(?<o2>\d+)\.(?<o3>\d+)\.(?<o4>\d+)$ "fd00:1::$o1:$o2:$o3:$o4";
+  default ::1;
+}
+
+location /cdn/path {
+  proxy_bind $loop_src;
+  proxy_pass http://[::1]:4446;
+}
+```
+
+Xray CDN-inbound должен слушать `::1` и принимать реальный IP из
+`X-Forwarded-For` через `trustedXForwardedFor`. На хосте нужны IPv6 на `lo`,
+маршрут `ip -6 route replace local fd00:1::/64 dev lo` и возможность заменить
+корневой `noqueue` на `fq`. Агент ставит маршрут и qdisc сам при применении;
+для постоянной конфигурации маршрут следует сохранить на хосте. Нужен ли
+`net.ipv6.ip_nonlocal_bind=1`, проверяется на целевой ноде отдельно.
+
+Проверенные варианты dispatcher и нескольких CDN upstream’ов описаны в
+операционном ТЗ проекта. CDN secrets и правила доверия XFF задаются отдельно.
+
+Агент ставит отдельные карты/фильтры на `lo`, не очищает и не перезаписывает
+пины `eth0`; после reconnect состояние восстанавливается. Если установка на
+`lo` не удалась, ошибка возвращается отдельно и не отменяет настройку `eth0`.
+Полный drop применяется только к классифицированным немобильным IPv4 на
+выбранном inbound. Неизвестный IP не добавляется в allowlist и не дропается.
+
+Новая версия агента должна быть собрана и опубликована вашим форком; одного
+изменения `.env` на установленном образе 1.9.0 недостаточно.
+
+---
+
 ## Обновление со старой версии (миграция на GHCR-образ)
 
 Если агент был установлен через `docker-compose build` (локальная сборка из исходников), выполните следующие шаги для перехода на готовый GHCR-образ.
@@ -284,7 +340,7 @@ nDPI видит трафик уже после NAT — от имени ноды,
 
 | Было (старая версия) | Стало (новая версия) |
 |---------------------|---------------------|
-| Локальная сборка `build: .` | Готовый образ `ghcr.io/case211/remnawave-admin-node-agent:latest` |
+| Локальная сборка `build: .` | Готовый образ `ghcr.io/mslab-tech-dev/remnawave-admin-node-agent:latest` |
 | `version: '3.8'` в docker-compose | Убран (deprecated) |
 | Нет healthcheck | Healthcheck встроен |
 | Нет лимитов ресурсов | Memory: 128M, CPU: 0.5 |

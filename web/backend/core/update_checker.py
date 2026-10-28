@@ -12,7 +12,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-GITHUB_REPO = "Case211/remnawave-admin"
+GITHUB_REPO = "mslab-tech-dev/remnawave-admin"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 GITHUB_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases"
 

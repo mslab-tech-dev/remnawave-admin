@@ -13,7 +13,7 @@
 
 ```bash
 curl -fsSL --retry 3 --retry-delay 2 \
-  https://raw.githubusercontent.com/Case211/remnawave-admin/main/node-agent/install.sh \
+  https://raw.githubusercontent.com/mslab-tech-dev/remnawave-admin/main/node-agent/install.sh \
   -o /tmp/rwa-node-agent-install.sh \
   && bash /tmp/rwa-node-agent-install.sh --uuid UUID --url URL --token TOKEN
 ```
@@ -37,7 +37,7 @@ curl -fsSL --retry 3 --retry-delay 2 \
 
 ```bash
 mkdir -p /opt/remnawave-node-agent && cd /opt/remnawave-node-agent
-curl -fsSLO --retry 3 --retry-delay 2 https://raw.githubusercontent.com/Case211/remnawave-admin/main/node-agent/docker-compose.yml
+curl -fsSLO --retry 3 --retry-delay 2 https://raw.githubusercontent.com/mslab-tech-dev/remnawave-admin/main/node-agent/docker-compose.yml
 nano .env
 docker compose up -d
 ```
@@ -50,7 +50,7 @@ AGENT_INTERVAL_SECONDS=30
 AGENT_XRAY_LOG_PATH=/var/log/remnanode/access.log
 ```
 
-Образ тянется готовый: `ghcr.io/case211/remnawave-admin-node-agent:latest`.
+Образ тянется из GHCR этого fork: `ghcr.io/mslab-tech-dev/remnawave-admin-node-agent:latest`.
 
 ### Переменные агента
 

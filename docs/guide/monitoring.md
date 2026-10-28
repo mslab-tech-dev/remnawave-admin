@@ -35,7 +35,7 @@ docker compose --profile monitoring up -d
 
 ## Дашборды Grafana
 
-Пять связанных дашбордов лежат в [`docs/grafana/`](https://github.com/Case211/remnawave-admin/tree/main/docs/grafana). Импорт: **Dashboards → New → Import → Upload JSON file**, datasource выбирается при каждом импорте.
+Пять связанных дашбордов лежат в [`docs/grafana/`](https://github.com/mslab-tech-dev/remnawave-admin/tree/main/docs/grafana). Импорт: **Dashboards → New → Import → Upload JSON file**, datasource выбирается при каждом импорте.
 
 | Файл | О чём |
 |------|-------|
@@ -176,7 +176,7 @@ panel_db_pool_used / panel_db_pool_size > 0.8
 
 ## Алерты
 
-Встроенный Prometheus подхватывает готовый набор правил из [`monitoring/alerts.yml`](https://github.com/Case211/remnawave-admin/blob/main/monitoring/alerts.yml): доступность бэкенда, всплеск 5xx, p95 задержек, насыщение пула БД, нода офлайн, молчащий агент, CPU, память и диск ноды, отставание синхронизации, отклонённые батчи, ошибки доставки уведомлений.
+Встроенный Prometheus подхватывает готовый набор правил из [`monitoring/alerts.yml`](https://github.com/mslab-tech-dev/remnawave-admin/blob/main/monitoring/alerts.yml): доступность бэкенда, всплеск 5xx, p95 задержек, насыщение пула БД, нода офлайн, молчащий агент, CPU, память и диск ноды, отставание синхронизации, отклонённые батчи, ошибки доставки уведомлений.
 
 Смотреть в **Prometheus UI → Alerts**. Доставка (Telegram, Slack, почта) — через ваш Alertmanager или Grafana Alerting; правила совместимы с обоими. Пороги намеренно консервативные: правьте под свой SLO и перезапускайте Prometheus.
 

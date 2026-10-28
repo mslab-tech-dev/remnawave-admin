@@ -35,7 +35,7 @@ Dashboards fill up in 15–30 seconds, after the first scrape.
 
 ## Grafana dashboards
 
-Five linked dashboards live in [`docs/grafana/`](https://github.com/Case211/remnawave-admin/tree/main/docs/grafana). Import them via **Dashboards → New → Import → Upload JSON file**, choosing the datasource each time.
+Five linked dashboards live in [`docs/grafana/`](https://github.com/mslab-tech-dev/remnawave-admin/tree/main/docs/grafana). Import them via **Dashboards → New → Import → Upload JSON file**, choosing the datasource each time.
 
 | File | About |
 |------|-------|
@@ -176,7 +176,7 @@ panel_db_pool_used / panel_db_pool_size > 0.8
 
 ## Alerts
 
-The built-in Prometheus picks up a ready rule set from [`monitoring/alerts.yml`](https://github.com/Case211/remnawave-admin/blob/main/monitoring/alerts.yml): backend availability, 5xx spikes, p95 latency, DB pool saturation, node offline, silent agent, node CPU, memory and disk, sync lag, rejected batches, notification delivery failures.
+The built-in Prometheus picks up a ready rule set from [`monitoring/alerts.yml`](https://github.com/mslab-tech-dev/remnawave-admin/blob/main/monitoring/alerts.yml): backend availability, 5xx spikes, p95 latency, DB pool saturation, node offline, silent agent, node CPU, memory and disk, sync lag, rejected batches, notification delivery failures.
 
 Look at them in **Prometheus UI → Alerts**. Delivery (Telegram, Slack, email) goes through your Alertmanager or Grafana Alerting; the rules work with both. The thresholds are deliberately conservative — tune them to your SLO and restart Prometheus.
 

@@ -17,13 +17,16 @@ from web.backend.tests.test_collector_api import (
 @pytest.fixture(autouse=True)
 def _clean_activity():
     collector._activity.clear()
+    collector._cdn_activity.clear()
     collector._last_activity_sweep = datetime.min
     yield
     collector._activity.clear()
+    collector._cdn_activity.clear()
 
 
-def _seen(ip, seen_sec_ago=0, user="u1", node="n1"):
+def _seen(ip, seen_sec_ago=0, user="u1", node="n1", inbound_tag="cdn-vk"):
     return {"user_uuid": user, "ip_address": ip, "node_uuid": node,
+            "inbound_tag": inbound_tag,
             "connected_at": datetime.utcnow() - timedelta(seconds=seen_sec_ago)}
 
 
@@ -47,6 +50,17 @@ class TestActivityMap:
         collector._sweep_activity(datetime.utcnow())
         assert "u2" not in collector._activity
         assert "1.1.1.1" in collector._activity["u1"]
+
+    def test_live_cdn_ips_are_scoped_by_node_inbound_and_freshness(self):
+        collector._note_activity([
+            _seen("1.1.1.1", inbound_tag="vk-cdn"),
+            _seen("1.1.1.1", inbound_tag="direct"),
+            _seen("2.2.2.2", seen_sec_ago=600, inbound_tag="vk-cdn"),
+            _seen("3.3.3.3", node="n2", inbound_tag="vk-cdn"),
+        ])
+        assert collector.live_cdn_ips_by_node({"n1": ["vk-cdn", "direct"]}) == {
+            "n1": {"vk-cdn": ["1.1.1.1"], "direct": ["1.1.1.1"]},
+        }
 
 
 class TestDetectorGetsLiveConnections:

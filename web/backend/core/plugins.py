@@ -62,6 +62,8 @@ class PluginParts:
 
     router: Optional[APIRouter] = None
     scheduled_tasks: list[ScheduledTask] = field(default_factory=list)
+    on_agent_connect: Optional[Callable[[str, str], Awaitable[None]]] = None
+    on_agent_result: Optional[Callable[[str, dict], Awaitable[None]]] = None
 
 
 @dataclass(frozen=True)
@@ -354,3 +356,33 @@ def start_scheduled_tasks() -> list[asyncio.Task]:
             )
             tasks.append(handle)
     return tasks
+
+
+async def notify_agent_connected(node_uuid: str, token: str) -> None:
+    """Дать плагинам синхронизировать состояние после reconnect агента."""
+    for manifest in _loaded:
+        callback = _parts.get(manifest.id, PluginParts()).on_agent_connect
+        if callback is None:
+            continue
+        try:
+            await callback(node_uuid, token)
+        except Exception:
+            logger.exception(
+                "plugins.agent_connect_failed", extra={"plugin": manifest.id, "node": node_uuid},
+            )
+
+
+async def notify_plugin_agent_result(plugin_id: str, node_uuid: str, msg: dict) -> None:
+    """Передать plugin:<id> command_result владельцу плагина."""
+    manifest = next((item for item in _loaded if item.id == plugin_id), None)
+    if manifest is None:
+        return
+    callback = _parts.get(plugin_id, PluginParts()).on_agent_result
+    if callback is None:
+        return
+    try:
+        await callback(node_uuid, msg)
+    except Exception:
+        logger.exception(
+            "plugins.agent_result_failed", extra={"plugin": plugin_id, "node": node_uuid},
+        )

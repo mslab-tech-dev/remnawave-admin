@@ -33,11 +33,17 @@ BPF_OBJECT = "/app/bpf/shaper.bpf.o"
 # Своя bpffs вне /sys: ``ip netns exec`` и подобные перемонтируют /sys, и
 # пины оттуда пропадают. Здесь их видит только контейнер агента.
 PIN_DIR = "/run/rwshaper"
+# Отдельный bpffs для CDN: его жизненный цикл не зависит от eth0.
+CDN_PIN_DIR = "/run/rwshaper-lo"
 # Меньше 49152: с этого номера ядро раздаёт приоритеты фильтрам без явного,
 # и чужая eBPF-программа на нём может закончить проверку раньше нас.
 SHAPER_PREF = 29304
 # Метка своего fq в корне: по ней при выключении понятно, что снимать его — нам
 ROOT_HANDLE = "7277:"
+CDN_ROOT_HANDLE = "7278:"
+CDN_L2_LEN = 14
+CDN_SHAPE = 1
+CDN_DROP = 2
 
 # Прежние раскладки мягкой блокировки, которые агент убирает при встрече:
 # prio в корне с нашим HTB 40: (агенты до 1.8.x) и ifb (сборки 1.9.0 до шейпера)
@@ -51,6 +57,7 @@ BURST_NS = 200_000_000
 
 MAX_PORTS = 64            # размер карты rws_ports
 MAX_PERSONAL = 16384      # размер карты rws_personal
+MAX_CDN_RULES = 64
 MAX_KBIT = 100_000_000    # 100 Гбит/с — всё, что выше, опечатка
 MIN_PENALTY_KBIT = 64
 
@@ -181,6 +188,86 @@ def client_key(ip: str) -> bytes:
     return addr.packed
 
 
+def cdn_label_key(ip: str) -> Optional[bytes]:
+    """Ключ IPv4-клиента, который nginx пометил адресом из fd00:1::/64."""
+    addr = ipaddress.ip_address(ip)
+    if addr.version != 4:
+        return None
+    octets = (int(part, 16) for part in str(addr).split("."))
+    return struct.pack(">8H", 0xFD00, 0x0001, 0, 0, *octets)
+
+
+def _cdn_client_key(ip: str) -> Optional[bytes]:
+    """Ключ карты CDN принимает IPv4 или уже рассчитанную IPv6-метку."""
+    addr = ipaddress.ip_address(ip)
+    if addr.version == 4:
+        return cdn_label_key(ip)
+    if addr in ipaddress.ip_network("fd00:1::/64"):
+        return addr.packed
+    return None
+
+
+def cdn_personal(personal: Dict[str, int]) -> tuple:
+    """Персональные IPv4-правила → IPv6-метки nginx; IPv6 пропускаются."""
+    labeled: Dict[str, int] = {}
+    skipped = 0
+    for ip, rate in personal.items():
+        key = cdn_label_key(ip)
+        if key is None:
+            skipped += 1
+            continue
+        labeled[str(ipaddress.IPv6Address(key))] = rate
+    return labeled, skipped
+
+
+def parse_cdn_policy(raw_rules: Iterable) -> tuple:
+    """Проверить действия по inbound-порту: shape с общей скоростью или drop."""
+    rules: Dict[int, tuple] = {}
+    skipped = 0
+    for item in raw_rules or []:
+        try:
+            if not isinstance(item, dict):
+                raise ValueError
+            port = _int(item.get("port"), "port", 1, 65535)
+            action = item.get("action")
+            if action == "drop":
+                policy = (CDN_DROP, 0)
+            elif action == "shape":
+                policy = (CDN_SHAPE, _int(item.get("rate_kbit"), "rate_kbit", 1, MAX_KBIT))
+            else:
+                raise ValueError
+        except (TypeError, ValueError):
+            skipped += 1
+            continue
+        rules[port] = policy
+    if len(rules) > MAX_CDN_RULES:
+        excess = len(rules) - MAX_CDN_RULES
+        rules = dict(sorted(rules.items())[:MAX_CDN_RULES])
+        skipped += excess
+    return rules, skipped
+
+
+def parse_cdn_clients(raw_ips: Iterable) -> tuple:
+    """Нормализовать подтверждённые немобильные IPv4, которым применима политика."""
+    ips = set()
+    skipped = 0
+    for raw_ip in raw_ips or []:
+        try:
+            addr = ipaddress.ip_address(str(raw_ip).strip())
+        except ValueError:
+            skipped += 1
+            continue
+        if addr.version != 4:
+            skipped += 1
+            continue
+        ips.add(str(addr))
+    if len(ips) > MAX_PERSONAL:
+        excess = len(ips) - MAX_PERSONAL
+        ips = set(sorted(ips)[:MAX_PERSONAL])
+        skipped += excess
+    return ips, skipped
+
+
 def encode_personal(kbit: int) -> bytes:
     """Значение карты rws_personal: одна скорость на обе стороны."""
     rate = _bytes_per_sec(kbit)
@@ -250,6 +337,163 @@ def _personal_updates(personal: Dict[str, int]) -> List[str]:
         f"key hex {_hex(client_key(ip))} value hex {_hex(encode_personal(kbit))}"
         for ip, kbit in sorted(personal.items())
     ]
+
+
+def encode_cdn_policy(action: int, rate_kbit: int = 0) -> bytes:
+    """Значение rws_cdn_rules: download, upload, action."""
+    rate = _bytes_per_sec(rate_kbit) if action == CDN_SHAPE else 0
+    return struct.pack("<3Q", rate, rate, action)
+
+
+def _cdn_personal_updates(personal: Dict[str, int]) -> List[str]:
+    return [
+        f"bpftool map update pinned {CDN_PIN_DIR}/maps/rws_personal "
+        f"key hex {_hex(key)} value hex {_hex(encode_personal(kbit))}"
+        for ip, kbit in sorted(personal.items())
+        if (key := _cdn_client_key(ip)) is not None
+    ]
+
+
+def _cdn_rule_updates(rules: Dict[int, tuple]) -> List[str]:
+    return [
+        f"bpftool map update pinned {CDN_PIN_DIR}/maps/rws_cdn_rules "
+        f"key hex {_hex(struct.pack('<H', port))} "
+        f"value hex {_hex(encode_cdn_policy(action, rate))}"
+        for port, (action, rate) in sorted(rules.items())
+    ]
+
+
+def _cdn_client_updates(ips: Iterable[str]) -> List[str]:
+    return [
+        f"bpftool map update pinned {CDN_PIN_DIR}/maps/rws_cdn_clients "
+        f"key hex {_hex(cdn_label_key(ip))} value hex 01"
+        for ip in sorted(ips)
+    ]
+
+
+def build_cdn_apply_script(
+    personal: Optional[Dict[str, int]] = None,
+    rules: Optional[Dict[int, tuple]] = None,
+    non_mobile_ips: Optional[Iterable[str]] = None,
+) -> str:
+    """Установить CDN-программы на lo, не затрагивая шейпер eth0."""
+    personal, rules, non_mobile_ips = personal or {}, rules or {}, list(non_mobile_ips or ())
+    lines = [
+        "set -e",
+        'IFACE="lo"',
+        'HAD=""',
+        'NEWROOT=""',
+        'NEWCLS=""',
+        'NEWMOUNT=""',
+        "trap 'RC=$?; if [ \"$RC\" -ne 0 ]; then "
+        f'for HOOK in egress ingress; do OURS=$(tc filter show dev lo $HOOK pref {SHAPER_PREF} 2>/dev/null || true); '
+        f'case "$OURS" in *rws_*) tc filter del dev lo $HOOK pref {SHAPER_PREF} ;; esac; done; '
+        'if [ -n "$NEWCLS" ] && [ -z "$(tc filter show dev lo egress 2>/dev/null)" ] '
+        '&& [ -z "$(tc filter show dev lo ingress 2>/dev/null)" ]; then tc qdisc del dev lo clsact 2>/dev/null || true; fi; '
+        f'if [ -n "$NEWROOT" ]; then tc qdisc del dev lo root 2>/dev/null || true; echo "ROOT=rolled_back"; fi; '
+        f"if [ -n \"$NEWMOUNT\" ] && mountpoint -q {CDN_PIN_DIR}; then umount {CDN_PIN_DIR}; fi; fi' EXIT",
+        '[ "$(cat /proc/sys/net/ipv6/conf/lo/disable_ipv6 2>/dev/null)" = 0 ] '
+        '|| { echo "ERROR=ipv6 disabled on lo"; exit 1; }',
+        "ip -6 route replace local fd00:1::/64 dev lo",
+        "for HOOK in egress ingress; do",
+        f'  OURS=$(tc filter show dev lo $HOOK pref {SHAPER_PREF} 2>/dev/null || true)',
+        '  if [ -n "$OURS" ]; then',
+        '    case "$OURS" in',
+        f'      *rws_*) tc filter del dev lo $HOOK pref {SHAPER_PREF}; HAD=1 ;;',
+        f'      *) echo "ERROR=$HOOK pref {SHAPER_PREF} on lo is taken by another tool"; exit 1 ;;',
+        "    esac",
+        "  fi",
+        "done",
+        'ROOT=$(tc qdisc show dev lo | awk \'$4 == "root" {print $2, $3; exit}\')',
+        'KIND=${ROOT%% *}; HANDLE=${ROOT#* }',
+        'if [ "$KIND" = fq ]; then',
+        '  echo "ROOT=kept:fq"',
+        'elif [ "$KIND" = noqueue ] || [ "$HANDLE" = "0:" ]; then',
+        f'  tc qdisc replace dev lo root handle {CDN_ROOT_HANDLE} fq',
+        '  NEWROOT=1',
+        '  echo "ROOT=installed:noqueue"',
+        'else',
+        '  echo "ERROR=lo has a foreign root qdisc"; exit 1',
+        'fi',
+        f"if mountpoint -q {CDN_PIN_DIR}; then rm -rf {CDN_PIN_DIR}/progs {CDN_PIN_DIR}/maps; "
+        f"else mkdir -p {CDN_PIN_DIR} && mount -t bpf bpf {CDN_PIN_DIR} && NEWMOUNT=1; fi",
+        f"bpftool prog loadall {BPF_OBJECT} {CDN_PIN_DIR}/progs type classifier pinmaps {CDN_PIN_DIR}/maps",
+        f'CFG="{_hex(encode_cfg(DISABLED, CDN_L2_LEN))}"',
+        f"bpftool map update pinned {CDN_PIN_DIR}/maps/rws_cfg key hex 00 00 00 00 value hex $CFG",
+        *_cdn_personal_updates(personal),
+        *_cdn_rule_updates(rules),
+        *_cdn_client_updates(non_mobile_ips),
+        'if ! tc qdisc show dev lo | grep -q "^qdisc clsact "; then',
+        '  if tc qdisc show dev lo | grep -q "^qdisc ingress "; then',
+        '    echo "ERROR=lo has an ingress qdisc, clsact cannot be added"; exit 1',
+        '  fi',
+        '  tc qdisc add dev lo clsact',
+        '  NEWCLS=1',
+        'fi',
+        f'tc filter add dev lo egress pref {SHAPER_PREF} bpf da pinned {CDN_PIN_DIR}/progs/rws_egress',
+        f'tc filter add dev lo ingress pref {SHAPER_PREF} bpf da pinned {CDN_PIN_DIR}/progs/rws_ingress',
+        f'echo "CDN_PERSONAL={len(personal)}"',
+        f'echo "CDN_RULES={len(rules)}"',
+        f'echo "CDN_CLIENTS={len(non_mobile_ips)}"',
+        'echo "ACTIVE=1"',
+    ]
+    return "\n".join(lines)
+
+
+def build_cdn_update_script(
+    personal_set: Optional[Dict[str, int]] = None,
+    personal_delete: Iterable[str] = (),
+    rules_set: Optional[Dict[int, tuple]] = None,
+    rules_delete: Iterable[int] = (),
+    clients_add: Iterable[str] = (),
+    clients_delete: Iterable[str] = (),
+) -> str:
+    """Обновить CDN-карты на месте; потерянные пины требуют полной установки."""
+    lines = [
+        "set -e",
+        f'[ -e {CDN_PIN_DIR}/maps/rws_personal ] || {{ echo "RELOAD=1"; exit {RELOAD_EXIT}; }}',
+        *_cdn_personal_updates(personal_set or {}),
+        *_cdn_rule_updates(rules_set or {}),
+        *_cdn_client_updates(clients_add),
+    ]
+    for ip in sorted(personal_delete):
+        key = _cdn_client_key(ip)
+        if key is not None:
+            lines.append(f"bpftool map delete pinned {CDN_PIN_DIR}/maps/rws_personal key hex {_hex(key)} 2>/dev/null || true")
+    for port in sorted(rules_delete):
+        lines.append(f"bpftool map delete pinned {CDN_PIN_DIR}/maps/rws_cdn_rules key hex {_hex(struct.pack('<H', port))} 2>/dev/null || true")
+    for ip in sorted(clients_delete):
+        key = cdn_label_key(ip)
+        if key is not None:
+            lines.append(f"bpftool map delete pinned {CDN_PIN_DIR}/maps/rws_cdn_clients key hex {_hex(key)} 2>/dev/null || true")
+    lines.append('echo "UPDATED=1"')
+    return "\n".join(lines)
+
+
+def build_cdn_disable_script() -> str:
+    """Снять CDN-фильтры и только собственные qdisc/pins с lo."""
+    lines = [
+        "set -e",
+        'HAD=""',
+        "for HOOK in egress ingress; do",
+        f'  OURS=$(tc filter show dev lo $HOOK pref {SHAPER_PREF} 2>/dev/null || true)',
+        '  case "$OURS" in',
+        f'    *rws_*) tc filter del dev lo $HOOK pref {SHAPER_PREF}; HAD=1 ;;',
+        '    *) : ;;',
+        '  esac',
+        'done',
+        'if [ -n "$HAD" ] && [ -z "$(tc filter show dev lo egress 2>/dev/null)" ] '
+        '&& [ -z "$(tc filter show dev lo ingress 2>/dev/null)" ]; then',
+        '  tc qdisc del dev lo clsact 2>/dev/null || true',
+        'fi',
+        f'if [ "$(tc qdisc show dev lo | awk \'$4 == "root" {{print $3; exit}}\')" = "{CDN_ROOT_HANDLE}" ]; then',
+        '  tc qdisc del dev lo root',
+        '  echo "ROOT=restored"',
+        'fi',
+        f'if mountpoint -q {CDN_PIN_DIR}; then umount {CDN_PIN_DIR}; fi',
+        'echo "ACTIVE=0"',
+    ]
+    return "\n".join(lines)
 
 
 def build_apply_script(cfg: ShaperConfig, personal: Optional[Dict[str, int]] = None) -> str:

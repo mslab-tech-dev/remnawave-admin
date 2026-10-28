@@ -20,7 +20,7 @@
 | `version` | `str` | Версия. Берите из метаданных пакета. |
 | `api_version` | `int` | Только `1`. |
 | `billing` | `"free" \| "subscription"` | `subscription` включает лицензионный гейт (см. ниже). Для стороннего плагина — `free`. |
-| `build` | `(ctx) -> PluginParts` | Фабрика роутера и фоновых задач. Без неё плагин зарегистрируется пустым. |
+| `build` | `(ctx) -> PluginParts` | Фабрика роутера, фоновых задач и необязательных lifecycle hooks. Без неё плагин зарегистрируется пустым. |
 | `rbac_resources` | `dict[str, list[str]]` | Ресурсы и действия, которые плагин добавляет в систему ролей. |
 | `navigation` | `list[NavEntry]` | Пункты бокового меню. |
 | `ui` | `PluginUI \| None` | Как рисовать страницу плагина. |
@@ -46,6 +46,12 @@ def _build(ctx):
 ```
 
 `ScheduledTask.coro` — корутина без аргументов; контекст в неё удобно замкнуть через `functools.partial`. Панель крутит её вечным циклом: исключение на тике пишется в лог и цикл продолжается, интервал не меньше секунды. Задачи стартуют после регистрации всех плагинов и гасятся вместе с панелью.
+
+`PluginParts.on_agent_connect(node_uuid, token)` вызывается после подключения
+агента, чтобы плагин мог восстановить свои правила после его рестарта.
+`on_agent_result(node_uuid, msg)` получает ответы команд с `command_id`
+формата `plugin:<plugin_id>:<action>`; эти ответы не попадают в журнал
+shell-команд.
 
 Долго спать внутри тика не нужно — интервал уже задан. Соединения к базе берите через `ctx.db`, он возвращает их в общий пул.
 
@@ -297,6 +303,15 @@ await panel_notify(
 | `normalize_user(raw)` | Ответ Panel API в панельный вид (camelCase → snake_case). |
 | `geoip_service()` | GeoIP панели: `lookup_batch` и кэш `ip_metadata`. |
 | `panel_db` | Тот же вход в базу, что `ctx.db`, — для модулей, которым контекст не передали. |
+| `panel_nodes_with_inbounds()` | Ноды и inbound’ы с UUID, тегом и портом; выдаются loopback inbound’ы на `::1`. |
+| `live_cdn_ips_by_node(node_tags)` | Живые IP по node UUID и inbound tags, из пятиминутного activity cache коллектора. |
+| `classify_mobile_ips(ips)` | Текущая классификация сетей: `true` мобильная, `false` немобильная, `null` неизвестная. При ошибке GeoIP адрес остаётся неизвестным. |
+| `push_cdn_policy(node_uuid, rules, non_mobile_ips)` | HMAC-подписанная replace-команда node-agent для CDN policy. Требует подключённого агента и `AGENT_CDN_SHAPING_ENABLED`. |
+
+Для CDN inbound-политик в `non_mobile_ips` должны попадать только адреса,
+для которых `classify_mobile_ips()` вернул `false`. Мобильные и неизвестные
+адреса не должны попадать в список; IPv6 за CDN пока не поддерживается схемой
+меток.
 
 ## Что панель отдаёт о плагинах
 

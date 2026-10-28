@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     # ── Agent v2: Command channel ─────────────────────────────
     # Включить WebSocket канал для приёма команд от бэкенда
     command_enabled: bool = False  # AGENT_COMMAND_ENABLED
+    cdn_shaping_enabled: bool = False  # AGENT_CDN_SHAPING_ENABLED
 
     # WebSocket URL для подключения к бэкенду (если отличается от collector_url)
     # Пример: wss://admin.example.com

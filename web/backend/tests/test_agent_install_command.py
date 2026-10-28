@@ -43,3 +43,8 @@ def test_all_parameters_reach_the_installer():
 def test_command_stays_single_line():
     """Панель отдаёт её одной строкой для копирования — перенос сломал бы вставку."""
     assert "\n" not in COMMAND
+
+
+def test_command_uses_fork_installer():
+    assert "raw.githubusercontent.com/mslab-tech-dev/remnawave-admin/main/node-agent/install.sh" in COMMAND
+    assert "Case211" not in COMMAND

@@ -144,6 +144,13 @@ async def agent_websocket(
     except Exception as e:
         logger.debug("Failed to push throttles to agent %s: %s", node_uuid, e)
 
+    # Плагины с node-agent state восстановят свои правила после его рестарта.
+    try:
+        from web.backend.core.plugins import notify_agent_connected
+        await notify_agent_connected(node_uuid, token)
+    except Exception as e:
+        logger.debug("Failed to notify plugins about agent %s: %s", node_uuid, e)
+
     # Состояние nDPI тоже отправляем при каждом подключении: агент после
     # перезапуска про него не помнит, а панель — единственный источник
     # правды об этом тумблере.
@@ -186,13 +193,20 @@ async def agent_websocket(
                         logger.debug("Failed to update agent ping timestamp: %s", e)
 
                 elif msg_type == "command_result":
-                    from web.backend.core import shaper_rollout
-                    if msg.get("command_id") == shaper_rollout.COMMAND_ID:
-                        # Ответ шейпера — состояние ноды, а не запись журнала скриптов
-                        await shaper_rollout.store_result(node_uuid, msg)
+                    command_id = str(msg.get("command_id") or "")
+                    if command_id.startswith("plugin:"):
+                        from web.backend.core.plugins import notify_plugin_agent_result
+                        parts = command_id.split(":", 2)
+                        if len(parts) == 3:
+                            await notify_plugin_agent_result(parts[1], node_uuid, msg)
                     else:
+                        from web.backend.core import shaper_rollout
+                        if command_id == shaper_rollout.COMMAND_ID:
+                        # Ответ шейпера — состояние ноды, а не запись журнала скриптов
+                            await shaper_rollout.store_result(node_uuid, msg)
+                        else:
                         # Agent finished executing a command — log it
-                        await _handle_command_result(node_uuid, msg)
+                            await _handle_command_result(node_uuid, msg)
 
                 elif msg_type == "shaper_penalties":
                     # Кого шейпер ноды оштрафовал за объём — в историю и админу
