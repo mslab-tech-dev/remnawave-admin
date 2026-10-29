@@ -1,2 +1,0 @@
-[rwa.plugin]
-cdn_policy = rwa_plugin_cdn_policy:manifest

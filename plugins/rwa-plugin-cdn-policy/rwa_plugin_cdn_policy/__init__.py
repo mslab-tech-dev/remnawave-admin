@@ -240,7 +240,9 @@ def _build(ctx):
                 (inbound["tag"], inbound["port"])
                 for inbound in node_index.get(item["node_uuid"], {}).get("inbounds", [])
             }
-            if any((rule.tag, rule.port) not in available for rule in item["inbounds"]):
+            # nodes уже прошли model_dump(), поэтому правила здесь — словари,
+            # а не объекты InboundPolicy: обращение к .tag падало в 500.
+            if any((rule["tag"], rule["port"]) not in available for rule in item["inbounds"]):
                 raise HTTPException(status_code=422, detail="inbound is not a loopback CDN inbound")
         merged = preserved + nodes
         await ctx.settings.set("policy", merged)

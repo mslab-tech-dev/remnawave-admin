@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rwa-plugin-cdn-policy"
-version = "0.1.0"
+version = "0.1.4"
 description = "Per-inbound CDN shaping/drop policy for Remnawave Admin"
 requires-python = ">=3.11"
 dependencies = ["fastapi>=0.110", "pydantic>=2.5"]

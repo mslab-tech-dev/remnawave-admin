@@ -60,3 +60,7 @@ docker-compose.override.yml
 # маркеры установки — рабочие данные стенда.
 plugins/*.whl
 plugins/.installed/
+# Артефакты сборки плагина: build/, egg-info и локальные venv в репозиторий не нужны
+plugins/**/build/
+plugins/**/*.egg-info/
+plugins/**/.venv/
